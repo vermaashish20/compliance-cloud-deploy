@@ -10,7 +10,7 @@ terraform {
   # This tells Terraform to store its memory (state file) in an Azure Storage Account.
   # This prevents Terraform from creating duplicate resources on subsequent CI/CD runs.
   backend "azurerm" {
-    resource_group_name  = "complidemo-tfstate-rg"
+    resource_group_name  = "complidemo-rg"
     storage_account_name = "complidemotfstate" # Must be globally unique
     container_name       = "tfstate"
     key                  = "prod.terraform.tfstate"
