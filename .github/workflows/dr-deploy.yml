@@ -1,0 +1,98 @@
+name: Manual Disaster Recovery Deployment (West US)
+
+on:
+  workflow_dispatch: # Allows manual trigger from the GitHub Actions UI
+
+env:
+  ACR_NAME: complidemoacr
+  RESOURCE_GROUP: complidr-rg
+  LOCATION: westus
+  ENVIRONMENT_NAME: complidr-env
+  # Globally unique app names for the DR region
+  BACKEND_APP_NAME: complidr-backend
+  FRONTEND_APP_NAME: complidr-frontend
+  
+  # The pristine backend image synced to West US via Premium ACR Geo-Redundancy
+  BACKEND_IMAGE: complidemoacr.azurecr.io/production/backend:latest
+  
+  # The new frontend image tag that will be built specifically for the DR backend
+  FRONTEND_IMAGE_DR: complidemoacr.azurecr.io/production/frontend:dr-latest
+
+jobs:
+  deploy-dr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure CLI
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Log in to Azure Container Registry
+        uses: azure/docker-login@v2
+        with:
+          login-server: ${{ env.ACR_NAME }}.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Create DR Resource Group (if it doesn't exist)
+        run: az group create --name ${{ env.RESOURCE_GROUP }} --location ${{ env.LOCATION }}
+
+      - name: Provision Azure Container Apps Environment (West US)
+        run: |
+          az containerapp env create \
+            --name ${{ env.ENVIRONMENT_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --location ${{ env.LOCATION }}
+
+      - name: Deploy Backend Container App
+        run: |
+          az containerapp create \
+            --name ${{ env.BACKEND_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --environment ${{ env.ENVIRONMENT_NAME }} \
+            --image ${{ env.BACKEND_IMAGE }} \
+            --target-port 3001 \
+            --ingress external \
+            --registry-server ${{ env.ACR_NAME }}.azurecr.io \
+            --registry-username ${{ secrets.ACR_USERNAME }} \
+            --registry-password ${{ secrets.ACR_PASSWORD }}
+
+      - name: Fetch New DR Backend URL
+        id: backend_url
+        run: |
+          BACKEND_FQDN=$(az containerapp show \
+            --name ${{ env.BACKEND_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query properties.configuration.ingress.fqdn \
+            --output tsv)
+            
+          BACKEND_URL="https://$BACKEND_FQDN"
+          echo "BACKEND_URL=$BACKEND_URL" >> $GITHUB_ENV
+          echo "Successfully fetched dynamic DR Backend URL: $BACKEND_URL"
+
+      - name: Build UI Image with embedded DR Backend URL
+        run: |
+          docker build \
+            --build-arg NEXT_PUBLIC_BACKEND_URL=${{ env.BACKEND_URL }} \
+            -t ${{ env.FRONTEND_IMAGE_DR }} \
+            ./frontend
+            
+      - name: Push DR UI Image to Premium Geo-Redundant ACR
+        run: docker push ${{ env.FRONTEND_IMAGE_DR }}
+
+      - name: Deploy Frontend Container App
+        run: |
+          az containerapp create \
+            --name ${{ env.FRONTEND_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --environment ${{ env.ENVIRONMENT_NAME }} \
+            --image ${{ env.FRONTEND_IMAGE_DR }} \
+            --target-port 3000 \
+            --ingress external \
+            --registry-server ${{ env.ACR_NAME }}.azurecr.io \
+            --registry-username ${{ secrets.ACR_USERNAME }} \
+            --registry-password ${{ secrets.ACR_PASSWORD }} \
+            --env-vars NEXT_PUBLIC_BACKEND_URL=${{ env.BACKEND_URL }}
