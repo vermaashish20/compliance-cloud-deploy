@@ -8,6 +8,8 @@ env:
   RESOURCE_GROUP: complidr-rg
   LOCATION: westus
   ENVIRONMENT_NAME: complidr-env
+  STORAGE_ACCOUNT_NAME: insightstr # (Update with your actual Geo-Redundant storage account name)
+  
   # Globally unique app names for the DR region
   BACKEND_APP_NAME: complidr-backend
   FRONTEND_APP_NAME: complidr-frontend
@@ -41,6 +43,13 @@ jobs:
           login-server: ${{ env.ACR_NAME }}.azurecr.io
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Initiate Azure Storage Account Planned Failover
+        run: |
+          echo "Triggering failover for Geo-Redundant storage account ${{ env.STORAGE_ACCOUNT_NAME }} to the secondary region..."
+          # Initiates a **planned** failover (zero data loss, maintains geo-redundancy). --yes confirms the prompt automatically.
+          # Note: Failover routing is managed by Azure seamlessly, so the apps won't need new credentials.
+          az storage account failover --name ${{ env.STORAGE_ACCOUNT_NAME }} --failover-type planned --yes
 
       - name: Create DR Resource Group (if it doesn't exist)
         run: az group create --name ${{ env.RESOURCE_GROUP }} --location ${{ env.LOCATION }}
